@@ -1,7 +1,6 @@
 import streamlit as st
 from PyPDF2 import PdfReader
 import docx
-import langchain
 import pandas as pd
 import base64
 from langchain.text_splitter import RecursiveCharacterTextSplitter, CharacterTextSplitter
@@ -43,6 +42,7 @@ def get_txt_text(txt_docs):
         text += txt.read().decode("utf-8") + "\n"
     return text
 
+# === Splitter selon le modèle ===
 def get_text_chunks(text, model_name):
     if model_name == "OpenAI":
         splitter = CharacterTextSplitter(separator="\n", chunk_size=1000, chunk_overlap=200, length_function=len)
@@ -50,8 +50,8 @@ def get_text_chunks(text, model_name):
         splitter = RecursiveCharacterTextSplitter(chunk_size=10000, chunk_overlap=1000)
     return splitter.split_text(text)
 
-# === Création du vector store ===
-def get_vector_store(text_chunks, model_name, api_key=None):
+# === Vector Store ===
+def get_vector_store(text_chunks, model_name, api_key):
     if model_name == "OpenAI":
         embeddings = OpenAIEmbeddings(api_key=api_key)
     elif model_name == "Gemini":
@@ -68,9 +68,9 @@ def get_conversational_chain(model_name, vectorstore=None, api_key=None):
         return ConversationalRetrievalChain.from_llm(llm=llm, retriever=vectorstore.as_retriever(), memory=memory)
     elif model_name == "Gemini":
         prompt_template = """
-        Answer the question as detailed as possible from the provided context, make sure to provide all details. 
-        If the answer is not in the context, just say "answer is not available in the context".
-        Context:\n {context}?\n
+        Answer the question as detailed as possible from the provided context. 
+        If the answer is not in the context, say "answer is not available in the context".
+        Context:\n {context}\n
         Question: \n{question}\n
         Answer:
         """
@@ -81,10 +81,10 @@ def get_conversational_chain(model_name, vectorstore=None, api_key=None):
 # === Fonction principale de traitement ===
 def user_input(user_question, model_name, api_key, pdf_docs, docx_docs, txt_docs, conversation_history):
     if api_key is None or (not pdf_docs and not docx_docs and not txt_docs):
-        st.warning("Please upload at least one file and provide API key before processing.")
+        st.warning("Upload files and provide API key before processing.")
         return
 
-    # Récupération du texte de tous les fichiers
+    # Récupérer le texte
     text = ""
     if pdf_docs:
         text += get_pdf_text(pdf_docs)
@@ -110,72 +110,49 @@ def user_input(user_question, model_name, api_key, pdf_docs, docx_docs, txt_docs
         response = chain({"input_documents": docs, "question": user_question}, return_only_outputs=True)
         response_output = response['output_text']
 
+    # Sauvegarder l'historique
     conversation_history.append((user_question_output, response_output, model_name, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
 
     # Affichage dans l'interface
-    st.markdown(
-        f"""
-        <style>
-        .chat-message {{ padding:1.5rem; border-radius:0.5rem; margin-bottom:1rem; display:flex; }}
-        .chat-message.user {{ background-color:#2b313e; }}
-        .chat-message.bot {{ background-color:#475063; }}
-        .chat-message .avatar {{ width:20%; }}
-        .chat-message .avatar img {{ max-width:78px; max-height:78px; border-radius:50%; object-fit:cover; }}
-        .chat-message .message {{ width:80%; padding:0 1.5rem; color:#fff; }}
-        </style>
-        <div class="chat-message user">
-            <div class="avatar">
-                <img src="https://i.ibb.co/CKpTnWr/user-icon-2048x2048-ihoxz4vq.png">
-            </div>
-            <div class="message">{user_question_output}</div>
-        </div>
-        <div class="chat-message bot">
-            <div class="avatar">
-                <img src="https://i.ibb.co/wNmYHsx/langchain-logo.webp">
-            </div>
-            <div class="message">{response_output}</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    st.markdown(f"""
+    <div style='padding:10px; margin-bottom:10px; background-color:#2b313e; color:white; border-radius:8px;'>
+    <b>User:</b> {user_question_output}
+    </div>
+    <div style='padding:10px; margin-bottom:10px; background-color:#475063; color:white; border-radius:8px;'>
+    <b>Bot ({model_name}):</b> {response_output}
+    </div>
+    """, unsafe_allow_html=True)
 
     # Export CSV
     if conversation_history:
         df = pd.DataFrame(conversation_history, columns=["Question","Answer","Model","Timestamp"])
         csv = df.to_csv(index=False)
         b64 = base64.b64encode(csv.encode()).decode()
-        href = f'<a href="data:file/csv;base64,{b64}" download="conversation_history.csv"><button>Download conversation history as CSV file</button></a>'
+        href = f'<a href="data:file/csv;base64,{b64}" download="conversation_history.csv"><button>Download CSV</button></a>'
         st.sidebar.markdown(href, unsafe_allow_html=True)
 
 # === Interface principale ===
 def main():
     st.set_page_config(page_title="Chat with multiple files", page_icon=":books:")
-    st.header("Chat with multiple files (PDF, DOCX, TXT) :books:")
+    st.header("Chat with multiple files (PDF, DOCX, TXT)")
 
     if 'conversation_history' not in st.session_state:
         st.session_state.conversation_history = []
 
-    # Sidebar profiles
-    st.sidebar.markdown("""
-    [![LinkedIn](https://img.shields.io/badge/LinkedIn-0077B5?style=for-the-badge&logo=linkedin&logoColor=white)](https://www.linkedin.com/in/huseyincenik/) 
-    [![Kaggle](https://img.shields.io/badge/Kaggle-20BEFF?style=for-the-badge&logo=kaggle&logoColor=white)](https://www.kaggle.com/huseyincenik/) 
-    [![GitHub](https://img.shields.io/badge/GitHub-100000?style=for-the-badge&logo=github&logoColor=white)](https://github.com/huseyincenik/)
-    """)
-
-    # Choix de l'IA
-    model_name = st.sidebar.radio("Select the Model:", ("OpenAI", "Gemini"))
+    # Sidebar : choix du modèle et clé API
+    model_name = st.sidebar.radio("Select Model:", ("OpenAI", "Gemini"))
     api_key = None
     if model_name == "OpenAI":
-        api_key = st.sidebar.text_input("Enter your OpenAI API Key:", type="password", value="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")
+        api_key = st.sidebar.text_input("OpenAI API Key:", type="password")
     elif model_name == "Gemini":
-        api_key = st.sidebar.text_input("Enter your Gemini API Key:", type="password", value="AIzaSyCmAOba6bgmI4FrZ2GRxM9XNCNM13ui6U4")
+        api_key = st.sidebar.text_input("Gemini API Key:", type="password")
 
     # Upload files
     pdf_docs = st.file_uploader("Upload PDF Files", accept_multiple_files=True, type=["pdf"])
     docx_docs = st.file_uploader("Upload DOCX Files", accept_multiple_files=True, type=["docx"])
     txt_docs = st.file_uploader("Upload TXT Files", accept_multiple_files=True, type=["txt"])
 
-    user_question = st.text_input("Ask a question from your files:")
+    user_question = st.text_input("Ask a question:")
 
     if user_question:
         user_input(user_question, model_name, api_key, pdf_docs, docx_docs, txt_docs, st.session_state.conversation_history)
